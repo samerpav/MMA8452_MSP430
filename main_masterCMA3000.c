@@ -1,82 +1,99 @@
-#include <msp430g2452.h>
+#include <msp430f2013.h>
 #include "i2c_usi_mst.h"
 
-#define SLAVE_I2C_ADDR         (0x1C)
+#define SLAVE_I2C_ADDR         (0x1D)
 
 UINT8 dataZ;
+unsigned char interrupt_triggered = 0;
 
 BOOL write_reg(UINT8 reg, UINT8 value);
 BOOL read_reg(UINT8 reg, UINT8 *value);
 
 void main(void)
 {
-  WDTCTL = WDTPW + WDTHOLD;                 // Stop watchdog
+  WDTCTL = WDTPW + WDTHOLD; 		// Stop watchdog timer
 
-  if (CALBC1_1MHZ ==0xFF || CALDCO_1MHZ == 0xFF)
-  {
-    while(1);                               // If calibration constants erased
-                                            // do not load, trap CPU!!
-  }
   BCSCTL1 = CALBC1_1MHZ;                    // Set DCO
   DCOCTL = CALDCO_1MHZ;
 
-  // setup master node
   i2c_usi_mst_init();
-  P1SEL |= BIT6 + BIT7;
 
-  // P2.2 supplies VCC to CMA3000
-  P2DIR |= BIT2;
-  P2OUT &= ~BIT2;
-  __delay_cycles(10000);
-  P2OUT |= BIT2;
-  __delay_cycles(10000);
+  // the only INPUT pin is P1.4 (INT1)
+  P1DIR = 0xFF;
+  P1DIR &= ~BIT4;
+  P1OUT = 0;
+  P1SEL = BIT6 + BIT7;
+
+  P2DIR = 0xFF;
+  P2OUT = 0;
+  P2SEL = 0;
+
+  // interrupt check on P1.4
+  P1IE = BIT4;
+  P1IES &= ~BIT4;	// rise edge
+  P1IFG &= ~BIT4; 	// P1.4 IFG cleared
 
   __enable_interrupt();
 
-  // set CTRL register
-  if(write_reg(0x02, 0x85) != TRUE)
-  {
-	while(1);
-  }
+  // WHO_AM_I
+  read_reg(0x0D, &dataZ);
+  if(dataZ == 0x2A)
+	  P1OUT |= BIT0;
 
-  while(1)
-  {
-	// delay ~1s
-    __delay_cycles(1000000);
+  write_reg(0x2A, 0x28); // 12.5 Hz Hz ODR, standby	0x28 = 101000
+  write_reg(0x2B, 0x03); // MODS = 0x03 (low power)
 
-    // read out DOUTZ register
-    if(read_reg(0x08, &dataZ) != TRUE)
-    {
-      __no_operation(); // for debugger
-    }
+  write_reg(0x2C, 0x02); // push-pull, active high
+  write_reg(0x1D, 0x1E); // ELE,x,y,z enabled
+  write_reg(0x1F, 0x01); // threshold
+  write_reg(0x20, 0x02); // debounce counter
+  write_reg(0x2D, 0x20); // interrupt enable register desc, int 1
+  write_reg(0x2E, 0x20); // interrupt config register desc, int 1
+
+  // set to ACTIVE mode
+  write_reg(0x2A, 0x29);	// 12.5 Hz ODR 0x29 = 101001
+
+  while (1)
+  {
+	  // enter low power mode
+	  LPM3;
+
+	  if (interrupt_triggered)
+	  {
+		  // clear transient event status register
+		  read_reg(0x1E, &dataZ);
+
+		  interrupt_triggered = 0;
+
+		  // have to set it to ACTIVE mode again to resume i2c operations!! don't know why?!?!?
+		  write_reg(0x2A, 0x29);	// 0x29 = 101001
+	  }
   }
 }
 
-BOOL write_reg(UINT8 reg, UINT8 value)
+#pragma vector=PORT1_VECTOR
+__interrupt void Port_1(void)
 {
-  BOOL ret = FALSE;
+	// determine source of interrupt -- don't need this for now
+	//read_reg(0x0C, &dataZ);
 
-  // generate START
-  i2c_usi_mst_gen_start();
+	int j;
+	for (j=10; j>0; j--)
+	{
+		volatile unsigned int i;
+		P1OUT ^= BIT0;
+		i = 3000;
+		do i--;
+		while(i != 0);
+	}
 
-  // send slave address with WRITE bit
-  if(i2c_usi_mst_send_address(SLAVE_I2C_ADDR, FALSE) == TRUE)
-  {
-    // receive ACK for slave address, send register address to be written
-    if(i2c_usi_mst_send_byte(reg) == TRUE)
-    {
-      // send register value
-      if(i2c_usi_mst_send_byte(value) == TRUE)
-      {
-    	ret = TRUE;
-      }
-    }
-  }
+	P1IFG &= ~BIT4; // P1.4 IFG cleared
+	P1OUT &= ~BIT0; // turn off LED
 
-  // generate STOP
-  i2c_usi_mst_gen_stop();
+	interrupt_triggered = 1;
 
-  return ret;
+	// exit low power mode
+	LPM3_EXIT;
 }
 
 BOOL read_reg(UINT8 reg, UINT8 *value)
@@ -115,3 +132,29 @@ BOOL read_reg(UINT8 reg, UINT8 *value)
   return ret;
 }
 
+BOOL write_reg(UINT8 reg, UINT8 value)
+{
+  BOOL ret = FALSE;
+
+  // generate START
+  i2c_usi_mst_gen_start();
+
+  // send slave address with WRITE bit
+  if(i2c_usi_mst_send_address(SLAVE_I2C_ADDR, FALSE) == TRUE)
+  {
+    // receive ACK for slave address, send register address to be written
+    if(i2c_usi_mst_send_byte(reg) == TRUE)
+    {
+      // send register value
+      if(i2c_usi_mst_send_byte(value) == TRUE)
+      {
+    	ret = TRUE;
+      }
+    }
+  }
+
+  // generate STOP
+  i2c_usi_mst_gen_stop();
+
+  return ret;
+}

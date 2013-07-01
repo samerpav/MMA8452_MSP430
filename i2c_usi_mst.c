@@ -1,4 +1,4 @@
-#include <msp430g2452.h>
+#include <msp430f2013.h>
 #include "i2c_usi_mst.h"
 
 #define SET_SDA_AS_OUTPUT()             (USICTL0 |= USIOE)
@@ -83,17 +83,6 @@ void i2c_usi_mst_gen_stop(void)
   FORCING_SDA_HIGH();
 }
 
-// function to wait for I2C counter flag condition
-void i2c_usi_mst_wait_usi_cnt_flag(void)
-{
-  while(usi_cnt_flag == FALSE)
-  {
-    __bis_SR_register(LPM0_bits);
-  }
-
-  // reset flag
-  usi_cnt_flag = FALSE;
-}
 
 // function to send a byte
 BOOL i2c_usi_mst_send_byte(UINT8 byte)
@@ -167,6 +156,21 @@ BOOL i2c_usi_mst_send_address(UINT8 addr, BOOL read)
   return(i2c_usi_mst_send_byte(addr));
 }
 
+// function to wait for I2C counter flag condition
+void i2c_usi_mst_wait_usi_cnt_flag(void)
+{
+  while(usi_cnt_flag == FALSE)
+  {
+	  __bis_SR_register(GIE);
+	  //__bis_SR_register(LPM0_bits + GIE);
+
+  }
+
+  // reset flag
+  usi_cnt_flag = FALSE;
+}
+
+
 // USI I2C ISR function
 #pragma vector = USI_VECTOR
 __interrupt void USI_ISR (void)
@@ -188,6 +192,8 @@ __interrupt void USI_ISR (void)
     USICTL1 &= ~USIIFG;
   }
 
-  __bic_SR_register_on_exit(LPM0_bits);
+  __bic_SR_register_on_exit(LPM3_bits + GIE);
+  //__bic_SR_register_on_exit(LPM0_bits + GIE);
+
 }
 
